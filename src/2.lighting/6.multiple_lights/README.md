@@ -8,3 +8,6 @@ I'm trying to make a growing fractal tree surrounded by orbiting fireflies
 <br>**OpenGL Rendering:** Uses OpenGL to draw textured tree branches (as scaled cubes) and glowing fireflies (as small cubes).
 <br>**Multiple Light Sources:** Includes directional light, a camera-attached spotlight, and point lights from fireflies for dynamic illumination.
 <br>**Interactive Camera:** Allows user navigation around the scene.
+
+## Credits
+[Wood texture credit](https://ambientcg.com/view?id=Wood047)
