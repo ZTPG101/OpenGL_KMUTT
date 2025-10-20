@@ -9,6 +9,9 @@ I wanted to make a growing L system fractual tree with procedural generation wit
 - **PBR-like Materials (Simplified):** It uses diffuse and specular texture maps to give the tree a more realistic, wood-like appearance, interacting with the various light sources.
 - **Interactive Camera:** The user can navigate the scene freely using a first-person camera, providing different perspectives of the growing, illuminated tree.
 
+## Video
+https://github.com/user-attachments/assets/900a7e60-2e96-4075-b082-656a5e5c410b
+
 ## Credits
 1. [Wood texture](https://ambientcg.com/view?id=Wood047)
 2. [L system explaination and formula](https://graphicmaths.com/fractals/l-systems/l-system-trees/)
