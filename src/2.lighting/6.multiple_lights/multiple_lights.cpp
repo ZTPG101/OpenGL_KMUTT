@@ -2,9 +2,11 @@
 #include <GLFW/glfw3.h>
 #include <stb_image.h>
 
+#define GLM_ENABLE_EXPERIMENTAL
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/gtx/rotate_vector.hpp> // For easier rotation of vectors
 
 #include <learnopengl/filesystem.h>
 #include <learnopengl/shader_m.h>
@@ -14,12 +16,16 @@
 #include <functional>
 #include <cstdlib>
 #include <ctime>
+#include <string>
+#include <map>
+#include <stack> // For L-system turtle graphics
+#include <vector>
 
-void framebuffer_size_callback(GLFWwindow* window, int width, int height);
+void framebuffer_size_callback(GLFWwindow * window, int width, int height);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset);
-void processInput(GLFWwindow *window);
-unsigned int loadTexture(const char *path);
+void processInput(GLFWwindow* window);
+unsigned int loadTexture(const char* path);
 
 // settings
 const unsigned int SCR_WIDTH = 1000;
@@ -36,27 +42,28 @@ float deltaTime = 0.0f;
 float lastFrame = 0.0f;
 float currentTime = 0.0f;
 
-// lighting
-glm::vec3 lightPos(1.2f, 1.0f, 2.0f);
+// L-system parameters
+std::string lSystemAxiom = "F"; // Axiom is 'F' for this rule
+std::map<char, std::string> lSystemRules;
+int lSystemIterations = 8;
+float lSystemBranchAngle = 30.0f; 
+float lSystemBranchScale = 0.7f;
 
-// fractal tree parameters
-struct Branch {
+// L-system animation progress
+float lSystemAnimationProgress = 0.0f; // 0.0 to 1.0, controls how much of the tree is 'grown'
+float lSystemGrowthSpeed = 0.04f; // Speed at which the tree grows
+
+// Global variable to store the generated L-system string
+std::string lSystemString;
+
+// Helper struct for turtle graphics state
+struct TurtleState {
     glm::vec3 position;
-    glm::vec3 direction;
+    glm::vec3 direction; // This is the 'forward' vector
+    glm::vec3 up;        // Local 'up' vector
+    glm::vec3 right;     // Local 'right' vector
     float length;
     float thickness;
-    int level;
-    std::vector<Branch> children;
-    
-    // Growth animation properties
-    float currentLength;
-    float currentThickness;
-    float growthSpeed;
-    float maxLength;
-    float maxThickness;
-    bool isGrowing;
-    float growthStartTime;
-    float growthDelay;
 };
 
 struct Firefly {
@@ -65,21 +72,19 @@ struct Firefly {
     float orbitRadius;
     float orbitSpeed;
     float orbitAngle;
-    int branchLevel;
 };
 
 // Global variables
 std::vector<Firefly> fireflies;
-std::vector<Branch> treeBranches;
-Branch rootBranch;
 
 // Function declarations
-void generateFractalTree(Branch& branch, int maxLevel, float scaleFactor);
-void renderBranch(const Branch& branch, Shader& shader, unsigned int VAO);
 void updateFireflies(float deltaTime);
 void generateFireflies();
-void updateBranchGrowth(Branch& branch, float currentTime);
-void initializeBranchGrowth(Branch& branch, float delay);
+std::string generateLSystem(const std::string& axiom, const std::map<char, std::string>& rules, int iterations);
+void renderLSystemTree(const std::string& lSystemStr, Shader& shader, unsigned int VAO,
+    TurtleState initialTurtleState, // Changed to take an initial TurtleState
+    float angle, float scaleFactor, float currentTime, float animationProgress);
+
 
 int main()
 {
@@ -91,7 +96,7 @@ int main()
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
 #ifdef __APPLE__
-        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
 
     // glfw window creation
@@ -174,19 +179,19 @@ int main()
         -0.5f,  0.5f,  0.5f,  0.0f,  1.0f,  0.0f,  0.0f,  0.0f,
         -0.5f,  0.5f, -0.5f,  0.0f,  1.0f,  0.0f,  0.0f,  1.0f
     };
-    // generate fractal tree
-    rootBranch.position = glm::vec3(0.0f, -2.0f, 0.0f);
-    rootBranch.direction = glm::vec3(0.0f, 1.0f, 0.0f);
-    rootBranch.length = 2.0f;
-    rootBranch.thickness = 0.3f;
-    rootBranch.level = 0;
-    
+
     // Initialize random seed
     srand(static_cast<unsigned int>(time(nullptr)));
-    
-    generateFractalTree(rootBranch, 6, 0.75f);
-    initializeBranchGrowth(rootBranch, 0.0f);
-    generateFireflies();
+
+    // L-system rules definition for a binary tree
+    lSystemRules['F'] = "F[+F][-F]"; // Simple binary branching
+    //lSystemRules['X'] = "F[+X][-X]"; // Example for a more complex axiom starting with 'X'
+
+    // Generate the L-system string
+    lSystemString = generateLSystem(lSystemAxiom, lSystemRules, lSystemIterations);
+    std::cout << "Generated L-system string (truncated): " << lSystemString.substr(0, glm::min((int)lSystemString.length(), 500)) << (lSystemString.length() > 500 ? "..." : "") << std::endl;
+
+
     // first, configure the cube's VAO (and VBO)
     unsigned int VBO, cubeVAO;
     glGenVertexArrays(1, &cubeVAO);
@@ -225,6 +230,35 @@ int main()
     lightingShader.setInt("material.diffuse", 0);
     lightingShader.setInt("material.specular", 1);
 
+    // Define initial TurtleState for the tree
+    TurtleState initialTurtleState;
+    initialTurtleState.position = glm::vec3(0.0f, -2.0f, 0.0f); // Base of the tree
+    initialTurtleState.direction = glm::vec3(0.0f, 1.0f, 0.0f); // Start pointing straight up
+
+    // Calculate initial right and up vectors for the turtle's local frame
+    glm::vec3 defaultNonParallelAxis = glm::vec3(0.0f, 0.0f, 1.0f); // Z-axis as a reference
+
+    // Calculate 'right' vector. Cross initial direction with a non-parallel axis.
+    initialTurtleState.right = glm::normalize(glm::cross(initialTurtleState.direction, defaultNonParallelAxis));
+    // If direction is parallel to defaultNonParallelAxis, pick another default
+    if (glm::length(initialTurtleState.right) < 0.001f) {
+        initialTurtleState.right = glm::normalize(glm::cross(initialTurtleState.direction, glm::vec3(1.0f, 0.0f, 0.0f)));
+    }
+
+    // Calculate 'up' vector, orthogonal to 'direction' and 'right'
+    initialTurtleState.up = glm::normalize(glm::cross(initialTurtleState.right, initialTurtleState.direction));
+
+    // Ensure all are normalized (might be redundant after cross/normalize but good practice)
+    initialTurtleState.direction = glm::normalize(initialTurtleState.direction);
+    initialTurtleState.right = glm::normalize(initialTurtleState.right);
+    initialTurtleState.up = glm::normalize(initialTurtleState.up);
+
+    initialTurtleState.length = 2.0f;
+    initialTurtleState.thickness = 0.3f;
+
+
+    // Generate fireflies
+    generateFireflies();
 
     // render loop
     // -----------
@@ -237,13 +271,18 @@ int main()
         lastFrame = currentFrame;
         currentTime = currentFrame;
 
+        // Update L-system animation progress
+        if (lSystemAnimationProgress < 1.0f) {
+            lSystemAnimationProgress += lSystemGrowthSpeed * deltaTime;
+            lSystemAnimationProgress = glm::min(lSystemAnimationProgress, 1.0f); // Cap at 1.0
+        }
+        else {
+            lSystemAnimationProgress = 0.0f; // Resets for continuous animation
+        }
         // input
         // -----
         processInput(window);
-        
-        // update branch growth
-        updateBranchGrowth(rootBranch, currentTime);
-        
+
         // update fireflies
         updateFireflies(deltaTime);
 
@@ -257,19 +296,13 @@ int main()
         lightingShader.setVec3("viewPos", camera.Position);
         lightingShader.setFloat("material.shininess", 32.0f);
 
-        /*
-           Here we set all the uniforms for the 5/6 types of lights we have. We have to set them manually and index 
-           the proper PointLight struct in the array to set each uniform variable. This can be done more code-friendly
-           by defining light types as classes and set their values in there, or by using a more efficient uniform approach
-           by using 'Uniform buffer objects', but that is something we'll discuss in the 'Advanced GLSL' tutorial.
-        */
         // directional light
         lightingShader.setVec3("dirLight.direction", -0.2f, -1.0f, -0.3f);
         lightingShader.setVec3("dirLight.ambient", 0.05f, 0.05f, 0.05f);
         lightingShader.setVec3("dirLight.diffuse", 0.4f, 0.4f, 0.4f);
         lightingShader.setVec3("dirLight.specular", 0.5f, 0.5f, 0.5f);
-        // firefly lights (use up to 8 fireflies)
-        for (int i = 0; i < 8 && i < static_cast<int>(fireflies.size()); i++) {
+        // firefly lights (use up to NR_POINT_LIGHTS fireflies - ensure shader has enough)
+        for (int i = 0; i < fireflies.size(); i++) {
             std::string prefix = "pointLights[" + std::to_string(i) + "]";
             lightingShader.setVec3((prefix + ".position").c_str(), fireflies[i].position);
             lightingShader.setVec3((prefix + ".ambient").c_str(), fireflies[i].color * 0.05f);
@@ -290,7 +323,7 @@ int main()
         lightingShader.setFloat("spotLight.linear", 0.09f);
         lightingShader.setFloat("spotLight.quadratic", 0.032f);
         lightingShader.setFloat("spotLight.cutOff", glm::cos(glm::radians(12.5f)));
-        lightingShader.setFloat("spotLight.outerCutOff", glm::cos(glm::radians(15.0f)));     
+        lightingShader.setFloat("spotLight.outerCutOff", glm::cos(glm::radians(15.0f)));
 
         // view/projection transformations
         glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 100.0f);
@@ -300,7 +333,7 @@ int main()
 
         // world transformation
         glm::mat4 model = glm::mat4(1.0f);
-        lightingShader.setMat4("model", model);
+        lightingShader.setMat4("model", model); // Set identity model for the scene itself
 
         // bind diffuse map
         glActiveTexture(GL_TEXTURE0);
@@ -309,27 +342,30 @@ int main()
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, specularMap);
 
-        // render fractal tree
+        // render L-system fractal tree
         glBindVertexArray(cubeVAO);
-        renderBranch(rootBranch, lightingShader, cubeVAO);
+        // Corrected call to renderLSystemTree
+        renderLSystemTree(lSystemString, lightingShader, cubeVAO,
+            initialTurtleState, // Pass the pre-initialized TurtleState
+            lSystemBranchAngle, lSystemBranchScale,
+            currentTime, lSystemAnimationProgress);
 
-         // also draw the lamp object(s)
-         lightCubeShader.use();
-         lightCubeShader.setMat4("projection", projection);
-         lightCubeShader.setMat4("view", view);
-    
-         // render fireflies as small glowing cubes
-         glBindVertexArray(lightCubeVAO);
-         for (size_t i = 0; i < fireflies.size(); i++)
-         {
-             model = glm::mat4(1.0f);
-             model = glm::translate(model, fireflies[i].position);
-             model = glm::scale(model, glm::vec3(0.1f)); // Make them very small
-             lightCubeShader.setMat4("model", model);
-             lightCubeShader.setVec3("lightColor", fireflies[i].color);
-             glDrawArrays(GL_TRIANGLES, 0, 36);
-         }
+        // also draw the lamp object(s)
+        lightCubeShader.use();
+        lightCubeShader.setMat4("projection", projection);
+        lightCubeShader.setMat4("view", view);
 
+        // render fireflies as small glowing cubes
+        glBindVertexArray(lightCubeVAO);
+        for (size_t i = 0; i < fireflies.size(); i++)
+        {
+            model = glm::mat4(1.0f);
+            model = glm::translate(model, fireflies[i].position);
+            model = glm::scale(model, glm::vec3(0.1f)); // Make them very small
+            lightCubeShader.setMat4("model", model);
+            lightCubeShader.setVec3("lightColor", fireflies[i].color);
+            glDrawArrays(GL_TRIANGLES, 0, 36);
+        }
 
         // glfw: swap buffers and poll IO events (keys pressed/released, mouse moved etc.)
         // -------------------------------------------------------------------------------
@@ -351,7 +387,7 @@ int main()
 
 // process all input: query GLFW whether relevant keys are pressed/released this frame and react accordingly
 // ---------------------------------------------------------------------------------------------------------
-void processInput(GLFWwindow *window)
+void processInput(GLFWwindow* window)
 {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         glfwSetWindowShouldClose(window, true);
@@ -370,7 +406,7 @@ void processInput(GLFWwindow *window)
 // ---------------------------------------------------------------------------------------------
 void framebuffer_size_callback(GLFWwindow* window, int width, int height)
 {
-    // make sure the viewport matches the new window dimensions; note that width and 
+    // make sure the viewport matches the new window dimensions; note that width and
     // height will be significantly larger than specified on retina displays.
     glViewport(0, 0, width, height);
 }
@@ -407,13 +443,13 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
 
 // utility function for loading a 2D texture from file
 // ---------------------------------------------------
-unsigned int loadTexture(char const * path)
+unsigned int loadTexture(char const* path)
 {
     unsigned int textureID;
     glGenTextures(1, &textureID);
 
     int width, height, nrComponents;
-    unsigned char *data = stbi_load(path, &width, &height, &nrComponents, 0);
+    unsigned char* data = stbi_load(path, &width, &height, &nrComponents, 0);
     if (data)
     {
         GLenum format;
@@ -444,165 +480,168 @@ unsigned int loadTexture(char const * path)
     return textureID;
 }
 
-// generate fractal tree recursively
-void generateFractalTree(Branch& branch, int maxLevel, float scaleFactor) {
-    if (branch.level >= maxLevel) return;
-    
-    // Create 3-4 child branches for more complex tree
-    int numChildren = 3 + (branch.level % 2); // 3 or 4 children
-    
-    for (int i = 0; i < numChildren; i++) {
-        Branch child;
-        child.level = branch.level + 1;
-        child.length = branch.length * scaleFactor;
-        child.thickness = branch.thickness * scaleFactor;
-        
-        // Calculate new position at the end of current branch
-        child.position = branch.position + branch.direction * branch.length;
-        
-        // Create 3D branching angles - spread in all directions including South
-        float angleY = i * 90.0f; // 0, 90, 180, 270 degrees (N, E, S, W)
-        float angleX = (i % 3) * 30.0f - 30.0f; // X rotation: -30, 0, 30 degrees for vertical spread
-        float angleZ = (i % 2) * 20.0f; // Z rotation: 0, 20 degrees for slight twist
-        
-        // Create rotation matrices for 3D spreading
-        glm::mat4 rotY = glm::rotate(glm::mat4(1.0f), glm::radians(angleY), glm::vec3(0.0f, 1.0f, 0.0f));
-        glm::mat4 rotX = glm::rotate(glm::mat4(1.0f), glm::radians(angleX), glm::vec3(1.0f, 0.0f, 0.0f));
-        glm::mat4 rotZ = glm::rotate(glm::mat4(1.0f), glm::radians(angleZ), glm::vec3(0.0f, 0.0f, 1.0f));
-        
-        // Apply rotations to direction (combine all rotations) - no randomness
-        child.direction = glm::vec3(rotZ * rotX * rotY * glm::vec4(branch.direction, 0.0f));
-        
-        branch.children.push_back(child);
-        generateFractalTree(branch.children.back(), maxLevel, scaleFactor);
+// Function to generate the L-system string
+std::string generateLSystem(const std::string& axiom, const std::map<char, std::string>& rules, int iterations) {
+    std::string current = axiom;
+    for (int i = 0; i < iterations; ++i) {
+        std::string next = "";
+        for (char c : current) {
+            if (rules.count(c)) {
+                next += rules.at(c);
+            }
+            else {
+                next += c;
+            }
+        }
+        current = next;
     }
+    return current;
 }
 
-// render a branch and its children recursively
-void renderBranch(const Branch& branch, Shader& shader, unsigned int VAO) {
-    // Calculate transformation matrix for this branch
-    glm::mat4 model = glm::mat4(1.0f);
-    
-    // Translate to branch position
-    model = glm::translate(model, branch.position);
-    
-    // Calculate rotation to align with branch direction
-    glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f);
-    glm::vec3 axis = glm::cross(up, branch.direction);
-    float angle = glm::acos(glm::dot(up, branch.direction));
-    
-    if (glm::length(axis) > 0.001f) {
-        model = glm::rotate(model, angle, glm::normalize(axis));
-    }
-    
-    // Scale to branch dimensions (make it cylindrical) - use current animated values
-    model = glm::scale(model, glm::vec3(branch.currentThickness, branch.currentLength, branch.currentThickness));
-    
-    shader.setMat4("model", model);
-    glDrawArrays(GL_TRIANGLES, 0, 36);
-    
-    // Render children recursively
-    for (const Branch& child : branch.children) {
-        renderBranch(child, shader, VAO);
+// Function to render the L-system tree using turtle graphics
+void renderLSystemTree(const std::string& lSystemStr, Shader& shader, unsigned int VAO,
+    TurtleState initialTurtleState,
+    float angle, float scaleFactor, float currentTime, // currentTime is already there
+    float animationProgress) // <--- NEW: Pass animationProgress here
+{
+    std::stack<TurtleState> stateStack;
+    TurtleState currentState = initialTurtleState;
+
+    glm::vec3 segmentDefaultUp = glm::vec3(0.0f, 1.0f, 0.0f);
+
+    // Calculate how many characters of the L-system string to process
+    // This will effectively grow the tree segment by segment.
+    size_t charsToProcess = static_cast<size_t>(lSystemStr.length() * animationProgress);
+    charsToProcess = glm::min(charsToProcess, lSystemStr.length()); // Ensure it doesn't exceed string length
+
+    // The per-segment growth animation is now mostly handled by the overall progress
+    // We can simplify the smoothProgress or remove it if we want distinct segments popping in.
+    // For now, let's keep it simple and just draw segments if they are 'processed'.
+
+    for (size_t i = 0; i < charsToProcess; ++i) { // <--- CHANGE: Loop only up to charsToProcess
+        char c = lSystemStr[i];
+        switch (c) {
+        case 'F': // Draw a line segment and move forward
+        {
+            float currentSegmentLength = currentState.length; // No longer scaled by smoothProgress directly
+            float currentSegmentThickness = currentState.thickness;
+
+            if (currentSegmentLength > 0.001f && currentSegmentThickness > 0.001f) {
+                glm::mat4 model = glm::mat4(1.0f);
+                model = glm::translate(model, currentState.position);
+
+                glm::vec3 rotationAxis = glm::cross(segmentDefaultUp, currentState.direction);
+                float rotationAngle = glm::acos(glm::dot(segmentDefaultUp, currentState.direction));
+
+                if (glm::length(rotationAxis) > 0.001f) {
+                    model = glm::rotate(model, rotationAngle, glm::normalize(rotationAxis));
+                }
+
+                model = glm::scale(model, glm::vec3(currentSegmentThickness, currentSegmentLength, currentSegmentThickness));
+
+                shader.setMat4("model", model);
+                glDrawArrays(GL_TRIANGLES, 0, 36);
+            }
+            currentState.position += currentState.direction * currentSegmentLength;
+        }
+        break;
+        // ... (rest of the cases +, -, &, ^, \, /, [, ]) ...
+        case '+':
+        {
+            currentState.direction = glm::rotate(currentState.direction, glm::radians(angle), currentState.up);
+            currentState.right = glm::rotate(currentState.right, glm::radians(angle), currentState.up);
+            currentState.direction = glm::normalize(currentState.direction);
+            currentState.right = glm::normalize(currentState.right);
+        }
+        break;
+        case '-':
+        {
+            currentState.direction = glm::rotate(currentState.direction, glm::radians(-angle), currentState.up);
+            currentState.right = glm::rotate(currentState.right, glm::radians(-angle), currentState.up);
+            currentState.direction = glm::normalize(currentState.direction);
+            currentState.right = glm::normalize(currentState.right);
+        }
+        break;
+        case '&':
+        {
+            currentState.direction = glm::rotate(currentState.direction, glm::radians(angle), currentState.right);
+            currentState.up = glm::rotate(currentState.up, glm::radians(angle), currentState.right);
+            currentState.direction = glm::normalize(currentState.direction);
+            currentState.up = glm::normalize(currentState.up);
+        }
+        break;
+        case '^':
+        {
+            currentState.direction = glm::rotate(currentState.direction, glm::radians(-angle), currentState.right);
+            currentState.up = glm::rotate(currentState.up, glm::radians(-angle), currentState.right);
+            currentState.direction = glm::normalize(currentState.direction);
+            currentState.up = glm::normalize(currentState.up);
+        }
+        break;
+        case '\\':
+        {
+            currentState.up = glm::rotate(currentState.up, glm::radians(angle), currentState.direction);
+            currentState.right = glm::rotate(currentState.right, glm::radians(angle), currentState.direction);
+            currentState.up = glm::normalize(currentState.up);
+            currentState.right = glm::normalize(currentState.right);
+        }
+        break;
+        case '/':
+        {
+            currentState.up = glm::rotate(currentState.up, glm::radians(-angle), currentState.direction);
+            currentState.right = glm::rotate(currentState.right, glm::radians(-angle), currentState.direction);
+            currentState.up = glm::normalize(currentState.up);
+            currentState.right = glm::normalize(currentState.right);
+        }
+        break;
+        case '[':
+            stateStack.push(currentState);
+            currentState.length *= scaleFactor;
+            currentState.thickness *= scaleFactor;
+            break;
+        case ']':
+            currentState = stateStack.top();
+            stateStack.pop();
+            break;
+        }
     }
 }
 
 // update firefly positions
 void updateFireflies(float deltaTime) {
+    // Define a fixed center for firefly orbits, near the base of the L-system tree
+    glm::vec3 orbitCenter = glm::vec3(0.0f, -1.0f, 0.0f); // Roughly where the L-system tree starts to branch
+
     for (auto& firefly : fireflies) {
         firefly.orbitAngle += firefly.orbitSpeed * deltaTime;
-        
-        // All fireflies orbit around the root branch
-        glm::vec3 rootBranchEnd = rootBranch.position + rootBranch.direction * rootBranch.currentLength;
-        
-        // Calculate orbit position around the root branch
+
+        // Calculate orbit position around the fixed center
         float x = cos(firefly.orbitAngle) * firefly.orbitRadius;
         float z = sin(firefly.orbitAngle) * firefly.orbitRadius;
-        
+
         // Add some vertical variation to the orbit
         float y = sin(firefly.orbitAngle * 0.5f) * 0.3f; // Gentle vertical movement
-        
-        firefly.position = rootBranchEnd + glm::vec3(x, y, z);
+
+        firefly.position = orbitCenter + glm::vec3(x, y, z);
     }
 }
 
-// generate fireflies around the first branch (root branch)
+// generate fireflies around the base of the tree
 void generateFireflies() {
-    // Create fireflies centered around the root branch - no randomness
+    // Create fireflies centered around a fixed point
     for (int i = 0; i < 12; i++) {
         Firefly firefly;
-        firefly.branchLevel = 0; // All fireflies orbit around root branch
-        // Structured orbits around the main trunk
-        firefly.orbitRadius = 1.5f + (i * 0.1f); // 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6
-        firefly.orbitSpeed = 0.5f + (i * 0.05f); // 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05
-        firefly.orbitAngle = (i * 30.0f) * 3.14159f / 180.0f; // 0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330 degrees
-        
-        // Structured firefly colors (warm colors)
-        float r = 0.8f + (i * 0.01f);
-        float g = 0.6f + (i * 0.02f);
-        float b = 0.2f + (i * 0.01f);
+        // Structured orbits
+        firefly.orbitRadius = 1.5f + (static_cast<float>(i) * 0.1f); // Radii spread out
+        firefly.orbitSpeed = 0.5f + (static_cast<float>(i) * 0.05f); // Speeds vary slightly
+        firefly.orbitAngle = (static_cast<float>(i) * 30.0f) * 3.14159f / 180.0f; // Staggered initial angles
+
+        // Structured firefly colors (warm, slightly varying hues)
+        float r = 0.8f + (static_cast<float>(rand()) / RAND_MAX * 0.2f);
+        float g = 0.6f + (static_cast<float>(rand()) / RAND_MAX * 0.2f);
+        float b = 0.2f + (static_cast<float>(rand()) / RAND_MAX * 0.1f);
         firefly.color = glm::vec3(r, g, b);
-        
+
         fireflies.push_back(firefly);
-    }
-}
-
-// initialize branch growth properties
-void initializeBranchGrowth(Branch& branch, float delay) {
-    branch.currentLength = 0.0f;
-    branch.currentThickness = 0.0f;
-    branch.maxLength = branch.length;
-    branch.maxThickness = branch.thickness;
-    branch.growthSpeed = 0.3f; // Fixed growth speed for consistent timing
-    branch.isGrowing = false;
-    branch.growthStartTime = delay;
-    branch.growthDelay = delay;
-    
-    // Initialize children with staggered delays - structured timing
-    float childDelay = delay + 2.0f + (branch.level * 0.5f); // Structured delay based on level
-    for (auto& child : branch.children) {
-        initializeBranchGrowth(child, childDelay);
-    }
-}
-
-// update branch growth animation
-void updateBranchGrowth(Branch& branch, float currentTime) {
-    // Check if it's time to start growing
-    if (!branch.isGrowing && currentTime >= branch.growthStartTime) {
-        branch.isGrowing = true;
-    }
-    
-    if (branch.isGrowing) {
-        float growthTime = currentTime - branch.growthStartTime;
-        float growthDuration = 2.0f / branch.growthSpeed;
-        float growthProgress = glm::min(growthTime / growthDuration, 1.0f);
-        
-        // Use smooth growth curves
-        float smoothProgress = growthProgress * growthProgress * (3.0f - 2.0f * growthProgress); // Smooth step
-        
-        branch.currentLength = branch.maxLength * smoothProgress;
-        branch.currentThickness = branch.maxThickness * smoothProgress;
-        
-        // Reset growth after 25 seconds for continuous animation
-        if (growthTime > 25.0f) {
-            branch.isGrowing = false;
-            branch.growthStartTime = currentTime + 2.0f; // Restart after 2 second pause
-        }
-        
-        // Update firefly positions based on current branch length
-        for (auto& firefly : fireflies) {
-            if (firefly.branchLevel == branch.level) {
-                // Update firefly orbit based on current branch end
-                glm::vec3 branchEnd = branch.position + branch.direction * branch.currentLength;
-                float x = cos(firefly.orbitAngle) * firefly.orbitRadius;
-                float z = sin(firefly.orbitAngle) * firefly.orbitRadius;
-                firefly.position = branchEnd + glm::vec3(x, 0.0f, z);
-            }
-        }
-    }
-    
-    // Recursively update children
-    for (auto& child : branch.children) {
-        updateBranchGrowth(child, currentTime);
     }
 }
