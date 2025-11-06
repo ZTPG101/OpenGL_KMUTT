@@ -1,0 +1,13 @@
+# MTL written from /Users/dlawlor/Desktop/boat.obj
+newmtl Tow_body
+Kd 0.6 0.6 0.6
+Ns 4096
+d 1
+illum 2
+Ka 0 0 0
+Ks 0 0 0
+map_Kd Tow_Body_A.tga.png
+map_Kd Tow_Body_D.tga.png
+map_Kd Tow_Body_MT.tga.png
+map_Kd Tow_Body_N.tga.png
+map_Kd Tow_Body_R.tga.png
